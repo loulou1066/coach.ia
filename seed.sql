@@ -1,0 +1,9 @@
+insert into exercises (name, muscle_group, equipment, cues, common_mistakes, default_rep_min, default_rep_max, increment_kg) values
+('Squat barre', 'jambes', 'barre', '["Pieds largeur d''épaules, pointes légèrement ouvertes","Dos neutre, abdos gainés","Genoux dans l''axe des pieds","Descendre au moins cuisses parallèles"]', '["Genoux qui rentrent","Talons qui décollent","Dos qui s''arrondit"]', 5, 8, 2.5),
+('Développé couché', 'pectoraux', 'barre', '["Omoplates serrées et basses","Pieds ancrés au sol","Barre au bas des pectoraux","Coudes à environ 45° du buste"]', '["Fesses qui décollent","Rebond sur la poitrine","Coudes trop écartés"]', 6, 10, 2.5),
+('Soulevé de terre roumain', 'ischios', 'barre', '["Barre collée aux jambes","Hanches vers l''arrière, genoux légèrement fléchis","Dos plat tout du long"]', '["Dos arrondi","Barre trop loin du corps"]', 8, 12, 2.5),
+('Développé militaire', 'épaules', 'barre', '["Abdos et fessiers serrés","Barre qui passe près du visage","Verrouiller au-dessus de la tête"]', '["Dos cambré","Poussée avec les jambes"]', 6, 10, 1.25),
+('Rowing barre', 'dos', 'barre', '["Buste penché à environ 45°","Tirer vers le nombril","Omoplates serrées en haut"]', '["Élan avec le buste","Dos arrondi"]', 8, 12, 2.5),
+('Tractions', 'dos', 'poids du corps', '["Départ bras tendus, épaules basses","Menton au-dessus de la barre","Descente contrôlée"]', '["Balancement","Amplitude incomplète"]', 6, 10, 1.25),
+('Presse à cuisses', 'jambes', 'machine', '["Dos plaqué contre le dossier","Genoux dans l''axe des pieds","Ne pas verrouiller les genoux en haut"]', '["Bassin qui décolle","Amplitude trop courte"]', 8, 12, 5),
+('Curl biceps', 'biceps', 'haltères', '["Coudes collés au corps","Montée sans élan","Descente contrôlée"]', '["Balancement du buste","Coudes qui avancent"]', 8, 12, 1);
