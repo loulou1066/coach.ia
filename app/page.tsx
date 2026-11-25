@@ -1,6 +1,7 @@
 'use client';
 import { useEffect, useState, useCallback } from 'react';
 import { supabase } from '@/lib/supabase';
+import { computeMacros } from '@/lib/nutrition';
 import { readiness, nextRecommendation, gauge, pointsForSession, tierFor, type SetLog } from '@/lib/progression';
 
 const today = () => new Date().toLocaleDateString('sv-SE');
@@ -32,15 +33,16 @@ function Auth() {
 }
 
 function App({ uid }: { uid: string }) {
-  const [tab, setTab] = useState<'jour' | 'seance'>('jour');
+  const [tab, setTab] = useState<'jour' | 'seance' | 'nutrition'>('jour');
   useEffect(() => { (async () => {
     await supabase.from('profiles').upsert({ user_id: uid });
     await supabase.from('rank_state').upsert({ user_id: uid });
   })(); }, [uid]);
   return (<>
     <div className="tabs"><button className={tab === 'jour' ? '' : 'alt'} onClick={() => setTab('jour')}>Aujourd'hui</button>
-      <button className={tab === 'seance' ? '' : 'alt'} onClick={() => setTab('seance')}>Séance</button></div>
-    {tab === 'jour' ? <Today uid={uid} /> : <Session uid={uid} />}
+      <button className={tab === 'seance' ? '' : 'alt'} onClick={() => setTab('seance')}>Séance</button>
+      <button className={tab === 'nutrition' ? '' : 'alt'} onClick={() => setTab('nutrition')}>Macros</button></div>
+    {tab === 'jour' ? <Today uid={uid} /> : tab === 'seance' ? <Session uid={uid} /> : <Nutrition uid={uid} />}
     <button className="alt" onClick={() => supabase.auth.signOut()}>Déconnexion</button></>);
 }
 
@@ -115,4 +117,33 @@ function Session({ uid }: { uid: string }) {
     <button disabled={!exId} onClick={() => setSets([...sets, { exercise_id: exId, name: ex.name, reps: r, weight: w, rir }])}>Ajouter la série</button>
     {sets.map((s, i) => <p key={i}>{s.name} : {s.weight} kg × {s.reps}</p>)}
     <button onClick={finish}>Terminer la séance</button><small>{msg}</small></div>);
+}
+
+function Nutrition({ uid }: { uid: string }) {
+  const [f, setF] = useState<any>({ sex: 'homme', age: 25, height: 170, weight: 70, goal: 'hypertrophie' });
+  const [perWeek, setPerWeek] = useState(3); const [res, setRes] = useState<any>(null);
+  useEffect(() => { (async () => {
+    const { data: p } = await supabase.from('profiles').select('*').eq('user_id', uid).maybeSingle();
+    if (p) setF({ sex: p.sex === 'femme' ? 'femme' : 'homme', age: p.birth_year ? new Date().getFullYear() - p.birth_year : 25, height: p.height_cm ?? 170, weight: Number(p.bodyweight_kg ?? 70), goal: p.goal });
+    const since = new Date(Date.now() - 28 * 864e5).toISOString();
+    const { count } = await supabase.from('workouts').select('id', { count: 'exact', head: true }).eq('user_id', uid).gte('started_at', since).not('ended_at', 'is', null);
+    if (count && count >= 4) setPerWeek(Math.min(7, Math.round(count / 4))); else if (p) setPerWeek(p.current_target_sessions);
+  })(); }, [uid]);
+  async function go() {
+    await supabase.from('profiles').update({ sex: f.sex, birth_year: new Date().getFullYear() - f.age, height_cm: f.height, bodyweight_kg: f.weight, goal: f.goal }).eq('user_id', uid);
+    setRes(computeMacros({ ...f, sessionsPerWeek: perWeek }));
+  }
+  const num = (k: string, label: string) => (<label>{label}<input type="number" value={f[k]} onChange={e => setF({ ...f, [k]: +e.target.value })} /></label>);
+  const line = (t: string, m: any) => (<p><b>{t}</b> : {m.kcal} kcal<br /><small>Protéines {m.protein} g · Glucides {m.carbs} g · Lipides {m.fat} g</small></p>);
+  return (<div className="card"><b>Calculateur de macros</b>
+    <label>Sexe<select value={f.sex} onChange={e => setF({ ...f, sex: e.target.value })}><option value="homme">Homme</option><option value="femme">Femme</option></select></label>
+    {num('age', 'Âge')}{num('height', 'Taille (cm)')}{num('weight', 'Poids (kg)')}
+    <label>Objectif<select value={f.goal} onChange={e => setF({ ...f, goal: e.target.value })}>
+      <option value="hypertrophie">Prise de muscle</option><option value="force">Force</option>
+      <option value="perte_de_gras">Perte de gras</option><option value="remise_en_forme">Remise en forme</option></select></label>
+    <button onClick={go}>Calculer</button>
+    {res?.error && <p>{res.error}</p>}
+    {res && !res.error && (<>{line("Jour d'entraînement", res.training)}{line('Jour de repos', res.rest)}
+      <small>Métabolisme de base {res.bmr} kcal · dépense estimée {res.tdee} kcal/jour</small>
+      {res.notes.map((n: string) => <p key={n}><small>{n}</small></p>)}</>)}</div>);
 }
