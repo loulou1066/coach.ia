@@ -34,18 +34,16 @@ function Auth() {
 }
 
 function App({ uid }: { uid: string }) {
-  const [tab, setTab] = useState<'jour' | 'seance' | 'nutrition' | 'coach'>('jour');
+  const [tab, setTab] = useState('jour');
   useEffect(() => { (async () => {
     await supabase.from('profiles').upsert({ user_id: uid });
     await supabase.from('rank_state').upsert({ user_id: uid });
   })(); }, [uid]);
+  const tabs = [['jour', "Aujourd'hui"], ['seance', 'Séance'], ['histo', 'Historique'], ['coach', 'Coach'], ['macros', 'Macros']];
   return (<>
-    <div className="tabs"><button className={tab === 'jour' ? '' : 'alt'} onClick={() => setTab('jour')}>Aujourd'hui</button>
-      <button className={tab === 'seance' ? '' : 'alt'} onClick={() => setTab('seance')}>Séance</button>
-      <button className={tab === 'nutrition' ? '' : 'alt'} onClick={() => setTab('nutrition')}>Macros</button>
-      <button className={tab === 'coach' ? '' : 'alt'} onClick={() => setTab('coach')}>Coach</button></div>
-    {tab === 'jour' ? <Today uid={uid} /> : tab === 'seance' ? <Session uid={uid} /> : tab === 'nutrition' ? <Nutrition uid={uid} /> : <Coach uid={uid} />}
-    <button className="alt" onClick={() => supabase.auth.signOut()}>Déconnexion</button></>);
+    <header><h1>Coach muscu</h1><button className="ghost" onClick={() => supabase.auth.signOut()}>Déconnexion</button></header>
+    {tab === 'jour' ? <Today uid={uid} /> : tab === 'seance' ? <Session uid={uid} /> : tab === 'histo' ? <History uid={uid} /> : tab === 'coach' ? <Coach uid={uid} /> : <Nutrition uid={uid} />}
+    <nav>{tabs.map(([k, t]) => <button key={k} className={tab === k ? 'on' : ''} onClick={() => setTab(k)}>{t}</button>)}</nav></>);
 }
 
 function Today({ uid }: { uid: string }) {
@@ -67,8 +65,9 @@ function Today({ uid }: { uid: string }) {
   }
   const gg = gauge(g.done, g.target);
   return (<>
-    <div className="card"><b>Semaine : {gg.done} / {gg.target} séances</b><div className="bar"><div style={{ width: gg.pct + '%' }} /></div>
-      <small>Rang : {rank.tier} · {rank.points} pts</small></div>
+    <div className="hero"><small>Cette semaine</small><div className="big">{gg.done}<span> / {gg.target}</span></div>
+      <div className="segs">{Array.from({ length: gg.target }, (_, i) => <i key={i} className={i < gg.done ? 'on' : ''} />)}</div>
+      <small>Rang {rank.tier}, {rank.points} pts</small></div>
     <div className="card"><b>Check-in du matin</b>
       <label>Sommeil (h)<input type="number" step="0.5" value={f.sleep} onChange={e => setF({ ...f, sleep: +e.target.value })} /></label>
       <label>Fatigue (1 frais – 5 épuisé)<input type="number" min={1} max={5} value={f.fatigue} onChange={e => setF({ ...f, fatigue: +e.target.value })} /></label>
@@ -126,7 +125,7 @@ function Session({ uid }: { uid: string }) {
     <input type="number" placeholder="Reps" value={r} onChange={e => setR(+e.target.value)} />
     <input type="number" placeholder="Reps en réserve" value={rir} onChange={e => setRir(+e.target.value)} />
     <button disabled={!exId} onClick={() => setSets([...sets, { exercise_id: exId, name: ex.name, reps: r, weight: w, rir }])}>Ajouter la série</button>
-    {sets.map((s, i) => <p key={i}>{s.name} : {s.weight} kg × {s.reps}</p>)}
+    {sets.map((s, i) => <div className="set" key={i}><span>{s.name} : {s.weight} kg × {s.reps}</span><button className="ghost" onClick={() => setSets(sets.filter((_, j) => j !== i))}>Retirer</button></div>)}
     <button onClick={finish}>Terminer la séance</button><small>{msg}</small></div>);
 }
 
@@ -213,4 +212,40 @@ function Coach({ uid }: { uid: string }) {
       <label>Ressenti<select value={effort} onChange={e => setEffort(e.target.value)}><option value="trop_dur">Trop dur</option><option value="bien">Bien</option><option value="trop_facile">Trop facile</option></select></label>
       <label>Douleur<select value={pain} onChange={e => setPain(e.target.value)}><option value="aucune">Aucune</option><option value="épaule">Épaule</option><option value="genou">Genou</option><option value="bas du dos">Bas du dos</option><option value="coude / poignet">Coude / poignet</option></select></label>
       <button onClick={adjustProg}>Ajuster mon programme</button>{msg && <p><small>{msg}</small></p>}</div>}</>);
+}
+
+function SetRow({ s, onSave, onDel }: any) {
+  const [w, setW] = useState(String(s.weight_kg)); const [r, setR] = useState(String(s.reps)); const [rr, setRr] = useState(s.rir == null ? '' : String(s.rir));
+  const dirty = +w !== Number(s.weight_kg) || +r !== s.reps || (rr === '' ? null : +rr) !== (s.rir ?? null);
+  return (<div className="row">
+    <input type="number" step="0.5" aria-label="Charge (kg)" value={w} onChange={e => setW(e.target.value)} />
+    <input type="number" aria-label="Reps" value={r} onChange={e => setR(e.target.value)} />
+    <input type="number" aria-label="Reps en réserve" placeholder="RIR" value={rr} onChange={e => setRr(e.target.value)} />
+    {dirty ? <button style={{ width: 'auto' }} onClick={() => onSave({ id: s.id, weight_kg: +w, reps: +r, rir: rr === '' ? null : +rr })}>Enregistrer</button>
+      : <button className="ghost" onClick={() => onDel(s.id)}>Retirer</button>}</div>);
+}
+
+function History({ uid }: { uid: string }) {
+  const [ws, setWs] = useState<any[]>([]); const [exs, setExs] = useState<any[]>([]); const [add, setAdd] = useState<any>({ ex: '', w: 0, r: 8 });
+  const load = useCallback(async () => {
+    const { data } = await supabase.from('workouts').select('id,started_at,workout_sets(id,set_index,reps,weight_kg,rir,exercise_id,exercises(name))').eq('user_id', uid).order('started_at', { ascending: false }).limit(20);
+    setWs(data ?? []);
+    const { data: e } = await supabase.from('exercises').select('id,name').order('name'); setExs(e ?? []);
+  }, [uid]);
+  useEffect(() => { load(); }, [load]);
+  async function saveSet(s: any) { await supabase.from('workout_sets').update({ weight_kg: s.weight_kg, reps: s.reps, rir: s.rir }).eq('id', s.id); load(); }
+  async function delSet(id: string) { await supabase.from('workout_sets').delete().eq('id', id); load(); }
+  async function delWorkout(id: string) { if (confirm('Supprimer cette séance et toutes ses séries ?')) { await supabase.from('workouts').delete().eq('id', id); load(); } }
+  async function addSet(wid: string, n: number) { if (!add.ex) return; await supabase.from('workout_sets').insert({ workout_id: wid, exercise_id: add.ex, set_index: n + 1, reps: add.r, weight_kg: add.w }); load(); }
+  if (!ws.length) return <div className="card"><b>Aucune séance pour l'instant</b><p><small>Enregistre ta première séance dans l'onglet Séance, tu pourras ensuite la corriger ici.</small></p></div>;
+  return (<>{ws.map(w => {
+    const sets = [...(w.workout_sets ?? [])].sort((a: any, b: any) => a.set_index - b.set_index);
+    const groups: Record<string, any[]> = {}; sets.forEach((s: any) => { (groups[s.exercises.name] = groups[s.exercises.name] || []).push(s); });
+    return (<details className="card" key={w.id}><summary>{new Date(w.started_at).toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' })} <small>({sets.length} séries)</small></summary>
+      {Object.entries(groups).map(([name, list]) => (<div key={name}><p><b>{name}</b></p>{list.map((s: any) => <SetRow key={s.id + s.weight_kg + s.reps + s.rir} s={s} onSave={saveSet} onDel={delSet} />)}</div>))}
+      <p><b>Ajouter une série</b></p>
+      <select value={add.ex} onChange={e => setAdd({ ...add, ex: e.target.value })}><option value="">Exercice</option>{exs.map(e => <option key={e.id} value={e.id}>{e.name}</option>)}</select>
+      <div className="row"><input type="number" step="0.5" aria-label="Charge (kg)" value={add.w} onChange={e => setAdd({ ...add, w: +e.target.value })} /><input type="number" aria-label="Reps" value={add.r} onChange={e => setAdd({ ...add, r: +e.target.value })} /><span /><button style={{ width: 'auto' }} onClick={() => addSet(w.id, sets.length)}>Ajouter</button></div>
+      <button className="danger" onClick={() => delWorkout(w.id)}>Supprimer cette séance</button></details>);
+  })}</>);
 }
