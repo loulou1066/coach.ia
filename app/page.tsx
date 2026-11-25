@@ -2,6 +2,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { supabase } from '@/lib/supabase';
 import { computeMacros } from '@/lib/nutrition';
+import { buildPlan, adjustEx } from '@/lib/coach-engine';
 import { readiness, nextRecommendation, gauge, pointsForSession, tierFor, type SetLog } from '@/lib/progression';
 
 const today = () => new Date().toLocaleDateString('sv-SE');
@@ -33,7 +34,7 @@ function Auth() {
 }
 
 function App({ uid }: { uid: string }) {
-  const [tab, setTab] = useState<'jour' | 'seance' | 'nutrition'>('jour');
+  const [tab, setTab] = useState<'jour' | 'seance' | 'nutrition' | 'coach'>('jour');
   useEffect(() => { (async () => {
     await supabase.from('profiles').upsert({ user_id: uid });
     await supabase.from('rank_state').upsert({ user_id: uid });
@@ -41,8 +42,9 @@ function App({ uid }: { uid: string }) {
   return (<>
     <div className="tabs"><button className={tab === 'jour' ? '' : 'alt'} onClick={() => setTab('jour')}>Aujourd'hui</button>
       <button className={tab === 'seance' ? '' : 'alt'} onClick={() => setTab('seance')}>Séance</button>
-      <button className={tab === 'nutrition' ? '' : 'alt'} onClick={() => setTab('nutrition')}>Macros</button></div>
-    {tab === 'jour' ? <Today uid={uid} /> : tab === 'seance' ? <Session uid={uid} /> : <Nutrition uid={uid} />}
+      <button className={tab === 'nutrition' ? '' : 'alt'} onClick={() => setTab('nutrition')}>Macros</button>
+      <button className={tab === 'coach' ? '' : 'alt'} onClick={() => setTab('coach')}>Coach</button></div>
+    {tab === 'jour' ? <Today uid={uid} /> : tab === 'seance' ? <Session uid={uid} /> : tab === 'nutrition' ? <Nutrition uid={uid} /> : <Coach uid={uid} />}
     <button className="alt" onClick={() => supabase.auth.signOut()}>Déconnexion</button></>);
 }
 
@@ -79,6 +81,13 @@ function Session({ uid }: { uid: string }) {
   const [exs, setExs] = useState<any[]>([]); const [exId, setExId] = useState(''); const [rec, setRec] = useState<any>(null);
   const [sets, setSets] = useState<any[]>([]); const [w, setW] = useState(0); const [r, setR] = useState(8); const [rir, setRir] = useState(2);
   const [score, setScore] = useState(70); const [msg, setMsg] = useState('');
+  const [days, setDays] = useState<any[]>([]); const [dayIdx, setDayIdx] = useState('');
+  useEffect(() => { (async () => {
+    const { data } = await supabase.from('programs').select('program_days(day_index,name,program_day_exercises(exercise_id,target_sets,rep_min,rep_max,target_rir))').eq('user_id', uid).eq('active', true).limit(1).maybeSingle();
+    setDays([...(data?.program_days ?? [])].sort((a: any, b: any) => a.day_index - b.day_index));
+  })(); }, [uid]);
+  const dayEx: any[] | null = dayIdx !== '' ? days[+dayIdx]?.program_day_exercises ?? null : null;
+  const visible = dayEx ? exs.filter(e => dayEx.some((x: any) => x.exercise_id === e.id)) : exs;
   useEffect(() => { (async () => {
     const { data } = await supabase.from('exercises').select('*').order('name'); setExs(data ?? []);
     const { data: c } = await supabase.from('daily_checkins').select('*').eq('user_id', uid).eq('day', today()).maybeSingle();
@@ -91,9 +100,10 @@ function Session({ uid }: { uid: string }) {
       by[x.workout_id].s.push({ reps: x.reps, weightKg: Number(x.weight_kg), rir: x.rir ?? undefined }); });
     const last = Object.values(by).sort((a, b) => b.t.localeCompare(a.t)).slice(0, 2).map(v => v.s);
     const e = exs.find(x => x.id === exId);
-    const rc = nextRecommendation(last, { repMin: e.default_rep_min, repMax: e.default_rep_max, targetRir: 2, incrementKg: Number(e.increment_kg), targetSets: 3 }, score);
+    const pt = dayEx?.find((x: any) => x.exercise_id === exId);
+    const rc = nextRecommendation(last, { repMin: pt?.rep_min ?? e.default_rep_min, repMax: pt?.rep_max ?? e.default_rep_max, targetRir: pt?.target_rir ?? 2, incrementKg: Number(e.increment_kg), targetSets: pt?.target_sets ?? 3 }, score);
     setRec(rc); if (rc.weightKg) setW(rc.weightKg); setR(rc.repGoal);
-  })(); }, [exId, exs, score]);
+  })(); }, [exId, exs, score, dayIdx]);
   async function finish() {
     if (!sets.length) return;
     const { data: wk, error } = await supabase.from('workouts').insert({ user_id: uid, ended_at: new Date().toISOString() }).select().single();
@@ -106,8 +116,9 @@ function Session({ uid }: { uid: string }) {
   }
   const ex = exs.find(x => x.id === exId);
   return (<div className="card"><b>Nouvelle séance</b>
+    {days.length > 0 && <select value={dayIdx} onChange={e => { setDayIdx(e.target.value); setExId(''); setRec(null); }}><option value="">Séance libre</option>{days.map((d: any, i: number) => <option key={i} value={i}>{d.name}</option>)}</select>}
     <select value={exId} onChange={e => setExId(e.target.value)}><option value="">Choisir un exercice</option>
-      {exs.map(e => <option key={e.id} value={e.id}>{e.name}</option>)}</select>
+      {visible.map(e => <option key={e.id} value={e.id}>{e.name}</option>)}</select>
     {rec && <p><small>{rec.weightKg ? `Objectif : ${rec.weightKg} kg × ${rec.repGoal} reps, ${rec.sets} séries (${REASONS[rec.reason]})` : 'Première fois : pars léger et note ta charge.'}</small></p>}
     {ex && <details><summary>Technique</summary><ul>{(ex.cues ?? []).map((c: string) => <li key={c}>{c}</li>)}</ul>
       <small>Erreurs : {(ex.common_mistakes ?? []).join(' · ')}</small></details>}
@@ -146,4 +157,60 @@ function Nutrition({ uid }: { uid: string }) {
     {res && !res.error && (<>{line("Jour d'entraînement", res.training)}{line('Jour de repos', res.rest)}
       <small>Métabolisme de base {res.bmr} kcal · dépense estimée {res.tdee} kcal/jour</small>
       {res.notes.map((n: string) => <p key={n}><small>{n}</small></p>)}</>)}</div>);
+}
+
+function Coach({ uid }: { uid: string }) {
+  const [f, setF] = useState<any>({ goal: 'hypertrophie', days: 4, minutes: 60, place: 'salle', level: 1, limitation: 'aucune' });
+  const [prog, setProg] = useState<any>(null); const [why, setWhy] = useState(''); const [msg, setMsg] = useState('');
+  const [effort, setEffort] = useState('bien'); const [pain, setPain] = useState('aucune');
+  const load = useCallback(async () => {
+    const { data } = await supabase.from('programs').select('id,name,method,program_days(day_index,name,program_day_exercises(id,position,target_sets,rep_min,rep_max,target_rir,exercises(name)))').eq('user_id', uid).eq('active', true).limit(1).maybeSingle();
+    setProg(data);
+    const { data: p } = await supabase.from('profiles').select('*').eq('user_id', uid).maybeSingle();
+    if (p) setF({ goal: p.goal, days: p.target_sessions_per_week, minutes: p.minutes_per_session ?? 60, place: p.equipment === 'maison' ? 'maison' : 'salle', level: p.experience_level, limitation: p.limitations ?? 'aucune' });
+  }, [uid]);
+  useEffect(() => { load(); }, [load]);
+  async function create(p: any) {
+    const { data: cat } = await supabase.from('exercises').select('id,name,equipment');
+    const plan = buildPlan(p, cat ?? []);
+    const ids = new Map((cat ?? []).map((e: any) => [e.name, e.id]));
+    await supabase.from('profiles').update({ goal: p.goal, target_sessions_per_week: p.days, minutes_per_session: p.minutes, equipment: p.place, experience_level: p.level, limitations: p.limitation }).eq('user_id', uid);
+    await supabase.from('programs').update({ active: false }).eq('user_id', uid);
+    const { data: pr } = await supabase.from('programs').insert({ user_id: uid, name: plan.name, goal: p.goal, method: plan.method }).select().single();
+    for (let i = 0; i < plan.days.length; i++) {
+      const d = plan.days[i];
+      const { data: day } = await supabase.from('program_days').insert({ program_id: pr.id, day_index: i + 1, name: d.name }).select().single();
+      await supabase.from('program_day_exercises').insert(d.exercises.map((e, k) => ({ program_day_id: day.id, exercise_id: ids.get(e.name), position: k + 1, target_sets: e.sets, rep_min: e.repMin, rep_max: e.repMax, target_rir: e.rir })));
+    }
+    setWhy(plan.why); await load();
+  }
+  async function adjustProg() {
+    await supabase.from('session_feedback').insert({ user_id: uid, note: effort, pain_area: pain === 'aucune' ? null : pain });
+    if (pain !== 'aucune') { await create({ ...f, limitation: pain }); setMsg(`Programme refait sans les exercices sensibles pour : ${pain}. Si la douleur persiste, consulte un professionnel de santé.`); return; }
+    for (const d of prog.program_days) for (const e of d.program_day_exercises) {
+      const a = adjustEx({ name: e.exercises.name, sets: e.target_sets, rir: e.target_rir }, effort as any);
+      await supabase.from('program_day_exercises').update({ target_sets: a.sets, target_rir: a.rir }).eq('id', e.id);
+    }
+    setMsg(effort === 'trop_dur' ? 'Volume allégé.' : effort === 'trop_facile' ? 'Intensité augmentée.' : 'Programme conservé : continue à monter les charges.');
+    await load();
+  }
+  const sel = (k: string, label: string, opts: [any, string][]) => (<label>{label}<select value={f[k]} onChange={e => setF({ ...f, [k]: isNaN(+e.target.value) ? e.target.value : +e.target.value })}>{opts.map(([v, t]) => <option key={t} value={v}>{t}</option>)}</select></label>);
+  const days = [...(prog?.program_days ?? [])].sort((a: any, b: any) => a.day_index - b.day_index);
+  return (<>
+    <div className="card"><b>Mon programme sur mesure</b>
+      {sel('goal', 'Objectif', [['hypertrophie', 'Prise de muscle'], ['force', 'Force'], ['perte_de_gras', 'Perte de gras'], ['remise_en_forme', 'Remise en forme']])}
+      {sel('days', 'Séances par semaine', [1, 2, 3, 4, 5, 6].map(n => [n, String(n)] as [any, string]))}
+      {sel('minutes', 'Durée par séance', [30, 45, 60, 75, 90].map(n => [n, n + ' min'] as [any, string]))}
+      {sel('place', 'Matériel', [['salle', 'Salle complète'], ['maison', 'Maison (haltères)']])}
+      {sel('level', 'Niveau', [[1, 'Débutant'], [2, 'Intermédiaire'], [3, 'Avancé']])}
+      {sel('limitation', 'Zone sensible', [['aucune', 'Aucune'], ['épaule', 'Épaule'], ['genou', 'Genou'], ['bas du dos', 'Bas du dos'], ['coude / poignet', 'Coude / poignet']])}
+      <button onClick={() => create(f)}>{prog ? 'Régénérer mon programme' : 'Générer mon programme'}</button>
+      {why && <p><small>{why}</small></p>}</div>
+    {prog && <div className="card"><b>{prog.name}</b>
+      {days.map((d: any) => (<div key={d.day_index}><p><b>{d.name}</b></p><ul>
+        {[...d.program_day_exercises].sort((a: any, b: any) => a.position - b.position).map((e: any) => <li key={e.position}>{e.exercises.name} : {e.target_sets} × {e.rep_min}-{e.rep_max} <small>({e.target_rir} reps en réserve)</small></li>)}</ul></div>))}</div>}
+    {prog && <div className="card"><b>Bilan de ta dernière séance</b>
+      <label>Ressenti<select value={effort} onChange={e => setEffort(e.target.value)}><option value="trop_dur">Trop dur</option><option value="bien">Bien</option><option value="trop_facile">Trop facile</option></select></label>
+      <label>Douleur<select value={pain} onChange={e => setPain(e.target.value)}><option value="aucune">Aucune</option><option value="épaule">Épaule</option><option value="genou">Genou</option><option value="bas du dos">Bas du dos</option><option value="coude / poignet">Coude / poignet</option></select></label>
+      <button onClick={adjustProg}>Ajuster mon programme</button>{msg && <p><small>{msg}</small></p>}</div>}</>);
 }
